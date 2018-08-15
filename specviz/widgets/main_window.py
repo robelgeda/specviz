@@ -9,7 +9,7 @@ from .workspace import Workspace
 from ..utils import UI_PATH
 from . import resources
 from ..core.hub import Hub
-
+from .smoothing import SmoothingDialog
 __all__ = ['MainWindow']
 
 
@@ -97,7 +97,7 @@ class MainWindow(UiMainWindow):
         self._workspace.add_plot_window()
 
     def _on_load_data(self):
-        pass
+        ex = SmoothingDialog(self._workspace, parent=self)
 
     def _on_toggle_plugin_dock(self):
         if self._plugin_action_group.checkedAction():
