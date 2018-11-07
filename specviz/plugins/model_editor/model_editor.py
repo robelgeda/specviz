@@ -1,12 +1,13 @@
 import os
 import uuid
+import re
 
 import numpy as np
 from astropy import units as u
 from astropy.modeling import models, fitting, optimizers
 from qtpy.QtCore import Qt
-from qtpy.QtGui import QIcon
-from qtpy.QtWidgets import QAction, QMenu, QMessageBox, QToolButton, QWidget, QDialog
+from qtpy.QtGui import QIcon, QValidator
+from qtpy.QtWidgets import QAction, QMenu, QMessageBox, QToolButton, QWidget, QDialog,  QDialogButtonBox
 from qtpy.uic import loadUi
 from specutils.fitting import fit_lines
 from specutils.spectra import Spectrum1D
@@ -87,6 +88,68 @@ class ModelEditor(QWidget):
         # Connect the fit model button
         self.fit_button.clicked.connect(self._on_fit_clicked)
 
+        self._setup_eq_editor()
+
+    def _setup_eq_editor(self):
+        # When the insert button is pressed, parse the current text of the
+        # combo box and put that variable in the equation.
+        self.insert_eq_button.clicked.connect(
+            lambda: self.equation_text_edit.textCursor().insertHtml(
+                self.model_list_combo.currentText()))
+
+        # Whenever the text inside the text edit box changes, do two things:
+        # 1. Parse the text and bold/color all verified variable names, and 2.
+        # validate that the equation would actually produce a compound model.
+        self.equation_text_edit.textChanged.connect(self._parse_variables)
+
+    def _parse_variables(self):
+        """
+        Whenever the text in the text edit box changes, parse and highlight the
+        verified model variable names.
+        """
+        full_string = self.equation_text_edit.toPlainText()
+
+        model_data_item = self.hub.data_item
+        if not isinstance(model_data_item, ModelDataItem):
+            return
+
+        model_editor_model = model_data_item.model_editor_model
+
+        model_editor_model.equation = full_string
+
+        for var in model_editor_model.fittable_models.keys():
+            comp_reg = re.compile(r"\b{}\b".format(var))
+
+            if len(comp_reg.findall(full_string)) > 0:
+                full_string = re.sub(r"\b{}\b".format(var),
+                                     "<span style='color:blue; font-weight:bold'>{0}</span>".format(var),
+                                     full_string)
+
+        # Store the cursor position because setting the html explicitly will
+        # reset it to the beginning. Also, disable signals so that setting the
+        # text in the box doesn't cause infinite recursion.
+        cursor = self.equation_text_edit.textCursor()
+        cursor_pos = cursor.position()
+        self.equation_text_edit.blockSignals(True)
+        self.equation_text_edit.setHtml(full_string)
+        self.equation_text_edit.blockSignals(False)
+        cursor.setPosition(cursor_pos)
+        self.equation_text_edit.setTextCursor(cursor)
+        self.equation_text_edit.repaint()
+
+    def _update_status_text(self, state, status_text):
+        """
+        Update dialog status text depending on the state of the validator.
+        """
+        self.status_label.setText(status_text)
+
+        # if state == QValidator.Acceptable:
+        #     self.button_box.button(QDialogButtonBox.Ok).setEnabled(True)
+        # else:
+        #     self.button_box.button(QDialogButtonBox.Ok).setEnabled(False)
+
+        # self.button_box.repaint()
+
     def new_message_box(self, text, info=None, icon=QMessageBox.Warning):
         message_box = QMessageBox()
         message_box.setText(text)
@@ -129,20 +192,32 @@ class ModelEditor(QWidget):
         model_data_item.model_editor_model.dataChanged.connect(
             lambda tl, br, r, pi=plot_data_item: self._on_model_data_changed(tl, br, pi))
 
+        model_data_item.model_editor_model.status_changed.connect(self._update_status_text)
+
     def _on_remove_model(self):
         """Remove an astropy model from the model editor tree view."""
+        model_editor_model = self.model_tree_view.model()
         indexes = self.model_tree_view.selectionModel().selectedIndexes()
 
         if len(indexes) > 0:
             selected_idx = indexes[0]
-            self.model_tree_view.model().removeRow(selected_idx.row())
+            model_editor_model.removeRow(selected_idx.row())
+
+        # Populate the drop down list with the model names
+        self.model_list_combo.clear()
+        self.model_list_combo.addItems(model_editor_model.fittable_models.keys())
 
     def _add_fittable_model(self, model):
-        idx = self.model_tree_view.model().add_model(model())
+        model_editor_model = self.model_tree_view.model()
+        idx = model_editor_model.add_model(model())
         self.model_tree_view.setExpanded(idx, True)
 
         for i in range(0, 3):
             self.model_tree_view.resizeColumnToContents(i)
+
+        # Populate the drop down list with the model names
+        self.model_list_combo.clear()
+        self.model_list_combo.addItems(model_editor_model.fittable_models.keys())
 
     def _on_model_data_changed(self, top_left, bottom_right, plot_data_item):
         if top_left.column() == 1:
@@ -190,13 +265,24 @@ class ModelEditor(QWidget):
         self.setup_holder_widget.setHidden(True)
 
         model_data_item = plot_data_item.data_item
+        model_editor_model = model_data_item.model_editor_model
 
         # Set the model on the tree view and expand all children initially.
-        self.model_tree_view.setModel(model_data_item.model_editor_model)
+        self.model_tree_view.setModel(model_editor_model)
         self.model_tree_view.expandAll()
 
         for i in range(0, 3):
             self.model_tree_view.resizeColumnToContents(i)
+
+        # Populate the drop down list with the model names
+        self.model_list_combo.clear()
+        self.model_list_combo.addItems(model_editor_model.fittable_models.keys())
+
+        self.equation_text_edit.setPlainText(model_editor_model.equation)
+
+        # Do an initial validation just to easily update the status text when
+        # the dialog is first shown.
+        model_editor_model.evaluate()
 
     def _combine_all_workspace_regions(self):
         """Get current widget region."""
@@ -239,7 +325,6 @@ class ModelEditor(QWidget):
         return fitter(model, x, y)
 
     def _on_fit_clicked(self, spectrum_data_item=None):
-        self._on_equation_edit_button_clicked()
         # The spectrum_data_item would be the data item that this model is to
         # be fit to. This selection is done via the data_selection_combo.
         combo_index = self.data_selection_combo.currentIndex()

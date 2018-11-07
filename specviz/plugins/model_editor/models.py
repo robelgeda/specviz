@@ -97,10 +97,10 @@ class ModelFittingModel(QStandardItemModel):
 
         self.appendRow([model_item, None, None, None])
 
-        # Add this model to the model equation string. By default, all models
-        # are simply added together
-        self._equation += " + {}".format(model_name) \
-            if len(self._equation) > 0 else "{}".format(model_name)
+        # # Add this model to the model equation string. By default, all models
+        # # are simply added together
+        # self._equation += " + {}".format(model_name) \
+        #     if len(self._equation) > 0 else "{}".format(model_name)
 
         return model_item.index()
 
